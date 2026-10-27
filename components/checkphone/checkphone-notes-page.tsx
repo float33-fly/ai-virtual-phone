@@ -156,7 +156,7 @@ export function CheckPhoneNotesPage({
   }
 
   const payload = snapshot?.payload ?? null;
-  const notes = useMemo(() => payload?.notes ?? [], [payload]);}
+  const notes = useMemo(() => payload?.notes ?? [], [payload]);
 
   return (
     <div
