@@ -155,9 +155,6 @@ export function CheckPhoneNotesPage({
     }
   }
 
-  const payload = snapshot?.payload ?? null;
-  const notes = useMemo(() => payload?.notes ?? [], [payload]);
-
   return (
     <div
       className="cp-notes-module"
