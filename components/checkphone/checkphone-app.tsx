@@ -41,6 +41,7 @@ import {
 import { PageShell } from "@/components/ui/page-shell";
 import { ConfirmDialog, Toggle } from "@/components/ui";
 import { CheckPhoneDebugErrorCard } from "@/components/checkphone/checkphone-debug-error-card";
+import { CheckPhoneActionModal } from "@/components/checkphone/checkphone-action-modal";
 import { CheckPhoneAssetsPage } from "@/components/checkphone/checkphone-assets-page";
 import { CheckPhoneBilibiliPage } from "@/components/checkphone/checkphone-bilibili-page";
 import { CheckPhoneBrowserPage } from "@/components/checkphone/checkphone-browser-page";

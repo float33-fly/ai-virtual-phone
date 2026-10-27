@@ -26,6 +26,7 @@ type CheckPhoneNotesPageProps = {
 export function CheckPhoneNotesPage({
   character,
   onBack,
+  onInteraction,
 }: CheckPhoneNotesPageProps) {
   const [snapshot, setSnapshot] =
     useState<CheckPhoneSnapshot<CheckPhoneNotesPayload> | null>(null);
@@ -102,6 +103,60 @@ export function CheckPhoneNotesPage({
 
   const payload = snapshot?.payload ?? null;
   const notes = useMemo(() => payload?.notes ?? [], [payload]);
+  
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editBody, setEditBody] = useState("");
+  const [showNewNoteModal, setShowNewNoteModal] = useState(false);
+  const [newNoteTitle, setNewNoteTitle] = useState("");
+  const [newNoteBody, setNewNoteBody] = useState("");
+
+  async function handleEditNote(noteId: string) {
+    const note = notes.find(n => n.id === noteId);
+    if (!note) return;
+    setEditingNoteId(noteId);
+    setEditTitle(note.title || "");
+    setEditBody(note.body);
+  }
+
+  async function handleSaveEdit() {
+    if (!editingNoteId) return;
+    const { editCheckPhoneNote } = await import("@/lib/checkphone-interaction");
+    const updated = await editCheckPhoneNote(character.id, editingNoteId, {
+      title: editTitle,
+      body: editBody,
+    });
+    if (updated && snapshot) {
+      setSnapshot({ ...snapshot, payload: updated });
+      onInteraction?.(`修改了${character.name}的备忘录"${editTitle || '（无标题）'}"`); 
+    }
+    setEditingNoteId(null);
+  }
+
+  async function handleCreateNote() {
+    const { createCheckPhoneNote } = await import("@/lib/checkphone-interaction");
+    const updated = await createCheckPhoneNote(character.id, newNoteTitle, newNoteBody);
+    if (updated && snapshot) {
+      setSnapshot({ ...snapshot, payload: updated });
+      onInteraction?.(`在${character.name}的手机上新建了备忘录"${newNoteTitle || newNoteBody.slice(0, 15)}..."`); 
+    }
+    setShowNewNoteModal(false);
+    setNewNoteTitle("");
+    setNewNoteBody("");
+  }
+
+  async function handleDeleteNote(noteId: string) {
+    const note = notes.find(n => n.id === noteId);
+    const { deleteCheckPhoneNote } = await import("@/lib/checkphone-interaction");
+    const updated = await deleteCheckPhoneNote(character.id, noteId);
+    if (updated && snapshot) {
+      setSnapshot({ ...snapshot, payload: updated });
+      onInteraction?.(`删除了${character.name}的备忘录"${note?.title || '（无标题）'}"`); 
+    }
+  }
+
+  const payload = snapshot?.payload ?? null;
+  const notes = useMemo(() => payload?.notes ?? [], [payload]);}
 
   return (
     <div
@@ -147,6 +202,27 @@ export function CheckPhoneNotesPage({
           </button>
 
           <div style={{ display: "flex", gap: "10px" }}>
+            <button
+              type="button"
+              onClick={() => setShowNewNoteModal(true)}
+              disabled={loading}
+              aria-label="New note"
+              style={{
+                background: "#10b981",
+                color: "#fff",
+                border: "none",
+                width: "38px",
+                height: "38px",
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                padding: 0,
+              }}
+            >
+              <span style={{ fontSize: "20px", fontWeight: "bold" }}>+</span>
+            </button>
             <button
               type="button"
               onClick={handleRefresh}
@@ -372,7 +448,25 @@ export function CheckPhoneNotesPage({
                   </div>
 
                   <div style={{ marginBottom: "10px" }}>
-                    {note.title && (
+                    {editingNoteId === note.id ? (
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        placeholder="标题（可选）"
+                        style={{
+                          width: "100%",
+                          fontSize: "calc(20px*var(--app-text-scale,1))",
+                          fontWeight: 800,
+                          color: "#111",
+                          padding: "8px",
+                          border: "2px solid #fae389",
+                          borderRadius: "8px",
+                          marginBottom: "8px",
+                          fontFamily: "inherit",
+                        }}
+                      />
+                    ) : note.title ? (
                       <h2
                         style={{
                           fontSize: "calc(20px*var(--app-text-scale,1))",
@@ -399,21 +493,113 @@ export function CheckPhoneNotesPage({
                           />
                         </span>
                       </h2>
-                    )}
+                    ) : null}
                   </div>
 
-                  <p
-                    style={{
-                      fontSize: "calc(13px*var(--app-text-scale,1))",
-                      color: "#666",
-                      lineHeight: 1.95,
-                      margin: 0,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    <CheckPhoneBilingualText text={note.body} tone="notes" />
-                  </p>
+                  {editingNoteId === note.id ? (
+                    <textarea
+                      value={editBody}
+                      onChange={(e) => setEditBody(e.target.value)}
+                      style={{
+                        width: "100%",
+                        minHeight: "120px",
+                        fontSize: "calc(13px*var(--app-text-scale,1))",
+                        color: "#666",
+                        lineHeight: 1.95,
+                        padding: "8px",
+                        border: "2px solid #fae389",
+                        borderRadius: "8px",
+                        fontFamily: "inherit",
+                        resize: "vertical",
+                      }}
+                    />
+                  ) : (
+                    <p
+                      style={{
+                        fontSize: "calc(13px*var(--app-text-scale,1))",
+                        color: "#666",
+                        lineHeight: 1.95,
+                        margin: 0,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      <CheckPhoneBilingualText text={note.body} tone="notes" />
+                    </p>
+                  )}
+                  <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+                    {editingNoteId === note.id ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleSaveEdit}
+                          style={{
+                            background: "#10b981",
+                            color: "#fff",
+                            border: "none",
+                            padding: "6px 12px",
+                            borderRadius: "6px",
+                            fontSize: "calc(12px*var(--app-text-scale,1))",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingNoteId(null)}
+                          style={{
+                            background: "#fff",
+                            color: "#666",
+                            border: "1px solid #ddd",
+                            padding: "6px 12px",
+                            borderRadius: "6px",
+                            fontSize: "calc(12px*var(--app-text-scale,1))",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleEditNote(note.id)}
+                          style={{
+                            background: "#fae389",
+                            color: "#111",
+                            border: "none",
+                            padding: "6px 12px",
+                            borderRadius: "6px",
+                            fontSize: "calc(12px*var(--app-text-scale,1))",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteNote(note.id)}
+                          style={{
+                            background: "#fee",
+                            color: "#c33",
+                            border: "none",
+                            padding: "6px 12px",
+                            borderRadius: "6px",
+                            fontSize: "calc(12px*var(--app-text-scale,1))",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          删除
+                        </button>
+                      </>
+                    )}
+                  </div>
                   {note.imageDescription && (
                     <div
                       style={{
@@ -451,6 +637,110 @@ export function CheckPhoneNotesPage({
           onConfirm={handleClear}
           onCancel={() => setConfirmClearOpen(false)}
         />
+      )}
+      {showNewNoteModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: "20px",
+          }}
+          onClick={() => setShowNewNoteModal(false)}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: "16px",
+              padding: "24px",
+              maxWidth: "400px",
+              width: "100%",
+              boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: "0 0 16px", fontSize: "18px", fontWeight: 700 }}>新建备忘录</h3>
+            <input
+              type="text"
+              placeholder="标题（可选）"
+              value={newNoteTitle}
+              onChange={(e) => setNewNoteTitle(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "10px",
+                border: "2px solid #fae389",
+                borderRadius: "8px",
+                fontSize: "14px",
+                marginBottom: "12px",
+                fontFamily: "inherit",
+              }}
+            />
+            <textarea
+              placeholder="内容"
+              value={newNoteBody}
+              onChange={(e) => setNewNoteBody(e.target.value)}
+              style={{
+                width: "100%",
+                minHeight: "120px",
+                padding: "10px",
+                border: "2px solid #fae389",
+                borderRadius: "8px",
+                fontSize: "14px",
+                fontFamily: "inherit",
+                resize: "vertical",
+              }}
+            />
+            <div style={{ display: "flex", gap: "8px", marginTop: "16px" }}>
+              <button
+                type="button"
+                onClick={handleCreateNote}
+                disabled={!newNoteBody.trim()}
+                style={{
+                  flex: 1,
+                  background: "#10b981",
+                  color: "#fff",
+                  border: "none",
+                  padding: "10px",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  cursor: newNoteBody.trim() ? "pointer" : "not-allowed",
+                  opacity: newNoteBody.trim() ? 1 : 0.5,
+                }}
+              >
+                创建
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNewNoteModal(false);
+                  setNewNoteTitle("");
+                  setNewNoteBody("");
+                }}
+                style={{
+                  flex: 1,
+                  background: "#fff",
+                  color: "#666",
+                  border: "1px solid #ddd",
+                  padding: "10px",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
