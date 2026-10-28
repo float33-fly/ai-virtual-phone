@@ -13,6 +13,12 @@ import type {
 } from "@/lib/checkphone-config";
 import { generateCheckPhoneNotes } from "@/lib/checkphone-engine";
 import {
+  clipInteractionText,
+  createCheckPhoneNote,
+  deleteCheckPhoneNote,
+  editCheckPhoneNote,
+} from "@/lib/checkphone-interaction";
+import {
   clearPhoneSnapshot,
   loadPhoneSnapshot,
   savePhoneSnapshot,
@@ -21,6 +27,7 @@ import {
 type CheckPhoneNotesPageProps = {
   character: Character;
   onBack: () => void;
+  onInteraction?: (summary: string) => void;
 };
 
 export function CheckPhoneNotesPage({
@@ -121,25 +128,26 @@ export function CheckPhoneNotesPage({
 
   async function handleSaveEdit() {
     if (!editingNoteId) return;
-    const { editCheckPhoneNote } = await import("@/lib/checkphone-interaction");
-    const updated = await editCheckPhoneNote(character.id, editingNoteId, {
+    const before = notes.find(n => n.id === editingNoteId);
+    const next = await editCheckPhoneNote(character.id, editingNoteId, {
       title: editTitle,
       body: editBody,
     });
-    if (updated && snapshot) {
-      setSnapshot({ ...snapshot, payload: updated });
-      onInteraction?.(`修改了${character.name}的备忘录"${editTitle || '（无标题）'}"`); 
+    if (next) {
+      setSnapshot(next);
+      const label = editTitle.trim() || before?.title || "无标题";
+      onInteraction?.(`把备忘录「${label}」改成了：“${clipInteractionText(editBody)}”`);
     }
     setEditingNoteId(null);
   }
 
   async function handleCreateNote() {
-    const { createCheckPhoneNote } = await import("@/lib/checkphone-interaction");
-    const updated = await createCheckPhoneNote(character.id, newNoteTitle, newNoteBody);
-    if (updated && snapshot) {
-      setSnapshot({ ...snapshot, payload: updated });
-      onInteraction?.(`在${character.name}的手机上新建了备忘录"${newNoteTitle || newNoteBody.slice(0, 15)}..."`); 
-    }
+    if (!newNoteBody.trim()) return;
+    const next = await createCheckPhoneNote(character.id, newNoteTitle.trim(), newNoteBody);
+    setSnapshot(next);
+    setLoaded(true);
+    const label = newNoteTitle.trim() ? `「${newNoteTitle.trim()}」` : "";
+    onInteraction?.(`新建了一条备忘录${label}：“${clipInteractionText(newNoteBody)}”`);
     setShowNewNoteModal(false);
     setNewNoteTitle("");
     setNewNoteBody("");
@@ -147,11 +155,10 @@ export function CheckPhoneNotesPage({
 
   async function handleDeleteNote(noteId: string) {
     const note = notes.find(n => n.id === noteId);
-    const { deleteCheckPhoneNote } = await import("@/lib/checkphone-interaction");
-    const updated = await deleteCheckPhoneNote(character.id, noteId);
-    if (updated && snapshot) {
-      setSnapshot({ ...snapshot, payload: updated });
-      onInteraction?.(`删除了${character.name}的备忘录"${note?.title || '（无标题）'}"`); 
+    const next = await deleteCheckPhoneNote(character.id, noteId);
+    if (next) {
+      setSnapshot(next);
+      onInteraction?.(`删掉了备忘录「${note?.title || clipInteractionText(note?.body ?? "", 15) || "无标题"}」`);
     }
   }
 

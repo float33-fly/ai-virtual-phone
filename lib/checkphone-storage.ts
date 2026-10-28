@@ -187,14 +187,43 @@ export async function loadPhoneSnapshot<AppPayload = unknown>(
   return null;
 }
 
-export async function savePhoneSnapshot<AppPayload = unknown>(snapshot: CheckPhoneSnapshot<AppPayload>): Promise<void> {
+export async function savePhoneSnapshot<AppPayload = unknown>(
+  snapshot: CheckPhoneSnapshot<AppPayload>,
+  options?: { silent?: boolean },
+): Promise<void> {
   snapshotCache.set(snapshot.id, snapshot as CheckPhoneSnapshot);
   try {
     await db.snapshots.put(snapshot as CheckPhoneSnapshot);
   } catch (error) {
     console.warn("[CheckPhoneStorage] save snapshot error:", error);
   }
-  recordCheckPhoneSnapshotEvent(snapshot as CheckPhoneSnapshot);
+  // silent：用户在查手机里手动改内容时不再追加“偷窥了某APP”，改由退出时的操作汇总记录
+  if (!options?.silent) recordCheckPhoneSnapshotEvent(snapshot as CheckPhoneSnapshot);
+}
+
+/**
+ * 追加一条查手机短期记忆（与“偷窥记录”同一通道，会被短期记忆组装器读取，
+ * 也会出现在查手机右上角的记录面板里，可逐条删除）。
+ * content 里可用 {{user}} / {{char}} 宏，{{char}} 解析为 characterId 对应的角色。
+ */
+export function appendCheckPhoneProjectionEntry(
+  characterId: string,
+  appId: CheckPhoneAppId,
+  content: string,
+  timestamp: string = new Date().toISOString(),
+): void {
+  if (typeof window === "undefined") return;
+  const id = cleanEventText(characterId, 160);
+  const text = String(content ?? "").trim();
+  if (!id || !text || !CHECKPHONE_APP_SPECS[appId]) return;
+  const entry: CheckPhoneProjectionEntry = {
+    id: `checkphone_op_${appId}_${Date.parse(timestamp) || Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    appId,
+    timestamp,
+    content: text,
+  };
+  const key = projectionStorageKey(id);
+  saveProjectionEventsByKey(key, [...loadProjectionEventsByKey(key), entry]);
 }
 
 export async function clearPhoneSnapshot(characterId: string, appId: CheckPhoneAppId): Promise<void> {

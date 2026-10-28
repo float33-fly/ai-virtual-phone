@@ -1,233 +1,148 @@
 // lib/checkphone-interaction.ts
-// Interactive operations for CheckPhone: edit notes, send messages as character, post moments
+// 查手机里的“动手”操作：改备忘录、以角色身份发消息等。
+// 所有操作先在查手机页面内生效；退出该角色的手机时，由 flushCheckPhoneInteractions
+// 统一写进短期记忆（查手机记录通道），角色会记得“{{user}}动了自己的手机”。
 
-import { pushChatMessage, loadChatSessions, createMessageId, type ChatMessage } from "./chat-storage";
-import { createMomentPost, type MomentPost } from "./moments-storage";
 import { loadCharacters } from "./character-storage";
-import { resolveUserIdentity } from "./settings-storage";
-import { savePhoneSnapshot, loadPhoneSnapshot, type CheckPhoneSnapshot } from "./checkphone-storage";
-import type { CheckPhoneNotesPayload } from "./checkphone-config";
+import type { CheckPhoneAppId, CheckPhoneNoteCard, CheckPhoneNotesPayload, CheckPhoneSnapshot } from "./checkphone-config";
+import { appendCheckPhoneProjectionEntry, loadPhoneSnapshot, savePhoneSnapshot } from "./checkphone-storage";
+import { formatPromptTimestamp } from "./prompt-time";
 
-/**
- * Edit a note in CheckPhone notes app.
- * Updates the snapshot and returns the updated payload.
- */
+export type CheckPhoneInteraction = {
+  characterId: string;      // 被查手机的角色
+  appId: CheckPhoneAppId;
+  summary: string;          // 写给该角色的描述，例：在备忘录里新建了「xxx」
+  recipient?: {             // 消息接收方（若能匹配到已有角色，会同步写进对方的短期记忆）
+    name: string;
+    content: string;        // 对方视角看到的内容
+  };
+};
+
+export function clipInteractionText(value: string, max = 40): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** 退出查手机时调用：按角色汇总操作，写入双方短期记忆。 */
+export function flushCheckPhoneInteractions(items: CheckPhoneInteraction[]): void {
+  if (items.length === 0) return;
+  const timestamp = new Date().toISOString();
+  const formattedTime = formatPromptTimestamp(timestamp);
+  const prefix = formattedTime ? `[查手机 ${formattedTime}]` : "[查手机]";
+  const characters = loadCharacters();
+
+  const byCharacter = new Map<string, CheckPhoneInteraction[]>();
+  for (const item of items) {
+    const list = byCharacter.get(item.characterId) ?? [];
+    list.push(item);
+    byCharacter.set(item.characterId, list);
+  }
+
+  for (const [characterId, list] of byCharacter) {
+    const owner = characters.find((c) => c.id === characterId);
+    const ownerName = owner?.name?.trim() || "角色";
+    const steps = list.map((item, index) => `${index + 1}. ${item.summary}`).join("；");
+    appendCheckPhoneProjectionEntry(
+      characterId,
+      list[list.length - 1].appId,
+      `${prefix} {{user}}拿着{{char}}的手机动了手脚：${steps}。这些都是{{user}}做的，不是{{char}}本人。`,
+      timestamp,
+    );
+
+    for (const item of list) {
+      if (!item.recipient) continue;
+      const target = characters.find(
+        (c) => c.id !== characterId && c.name?.trim() && c.name.trim() === item.recipient!.name.trim(),
+      );
+      if (!target) continue;
+      appendCheckPhoneProjectionEntry(
+        target.id,
+        item.appId,
+        `${prefix} ${ownerName}给{{char}}发来消息：“${item.recipient.content}”`,
+        timestamp,
+      );
+    }
+  }
+}
+
+function nowNoteLabel(): string {
+  return new Date().toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+async function saveNotesPayload(
+  characterId: string,
+  snapshot: CheckPhoneSnapshot<CheckPhoneNotesPayload> | null,
+  payload: CheckPhoneNotesPayload,
+): Promise<CheckPhoneSnapshot<CheckPhoneNotesPayload>> {
+  const now = new Date().toISOString();
+  const next: CheckPhoneSnapshot<CheckPhoneNotesPayload> = {
+    id: `${characterId}:notes`,
+    characterId,
+    appId: "notes",
+    generatedAt: snapshot?.generatedAt ?? now,
+    updatedAt: now,
+    summary: snapshot?.summary,
+    payload,
+  };
+  await savePhoneSnapshot(next, { silent: true });
+  return next;
+}
+
 export async function editCheckPhoneNote(
   characterId: string,
   noteId: string,
-  updates: { title?: string; body?: string }
-): Promise<CheckPhoneNotesPayload | null> {
+  updates: { title: string; body: string },
+): Promise<CheckPhoneSnapshot<CheckPhoneNotesPayload> | null> {
   const snapshot = await loadPhoneSnapshot<CheckPhoneNotesPayload>(characterId, "notes");
   if (!snapshot?.payload) return null;
-
-  const noteIndex = snapshot.payload.notes.findIndex((n) => n.id === noteId);
-  if (noteIndex === -1) return null;
-
-  const updatedNotes = [...snapshot.payload.notes];
-  updatedNotes[noteIndex] = {
-    ...updatedNotes[noteIndex],
-    ...(updates.title !== undefined && { title: updates.title }),
-    ...(updates.body !== undefined && { body: updates.body }),
-    updatedLabel: new Date().toLocaleString("zh-CN", {
-      month: "numeric",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }),
-  };
-
-  const updatedPayload: CheckPhoneNotesPayload = {
-    ...snapshot.payload,
-    notes: updatedNotes,
-  };
-
-  const updatedSnapshot: CheckPhoneSnapshot<CheckPhoneNotesPayload> = {
-    ...snapshot,
-    payload: updatedPayload,
-    updatedAt: new Date().toISOString(),
-  };
-
-  await savePhoneSnapshot(updatedSnapshot);
-  return updatedPayload;
+  const notes = snapshot.payload.notes.map((note): CheckPhoneNoteCard =>
+    note.id === noteId
+      ? {
+          ...note,
+          title: updates.title,
+          body: updates.body,
+          preview: clipInteractionText(updates.body, 60),
+          updatedLabel: nowNoteLabel(),
+        }
+      : note,
+  );
+  return saveNotesPayload(characterId, snapshot, { ...snapshot.payload, notes });
 }
 
-/**
- * Create a new note in CheckPhone notes app.
- */
 export async function createCheckPhoneNote(
   characterId: string,
   title: string,
-  body: string
-): Promise<CheckPhoneNotesPayload | null> {
+  body: string,
+): Promise<CheckPhoneSnapshot<CheckPhoneNotesPayload>> {
   const snapshot = await loadPhoneSnapshot<CheckPhoneNotesPayload>(characterId, "notes");
-  if (!snapshot?.payload) {
-    // Create initial payload if none exists
-    const initialPayload: CheckPhoneNotesPayload = {
-      notes: [
-        {
-          id: `note_${Date.now()}`,
-          title,
-          body,
-          updatedLabel: new Date().toLocaleString("zh-CN", {
-            month: "numeric",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-        },
-      ],
-    };
-
-    const newSnapshot: CheckPhoneSnapshot<CheckPhoneNotesPayload> = {
-      id: `${characterId}:notes`,
-      characterId,
-      appId: "notes",
-      generatedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      summary: "",
-      payload: initialPayload,
-    };
-
-    await savePhoneSnapshot(newSnapshot);
-    return initialPayload;
-  }
-
-  const newNote = {
-    id: `note_${Date.now()}`,
+  const newNote: CheckPhoneNoteCard = {
+    id: `note_user_${Date.now()}`,
     title,
+    preview: clipInteractionText(body, 60),
     body,
-    updatedLabel: new Date().toLocaleString("zh-CN", {
-      month: "numeric",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }),
+    updatedLabel: nowNoteLabel(),
   };
-
-  const updatedPayload: CheckPhoneNotesPayload = {
-    ...snapshot.payload,
-    notes: [newNote, ...snapshot.payload.notes],
+  const base: CheckPhoneNotesPayload = snapshot?.payload ?? {
+    headerTitle: "Memos",
+    headerSubtitle: "PRIVATE FRAGMENTS",
+    notes: [],
   };
-
-  const updatedSnapshot: CheckPhoneSnapshot<CheckPhoneNotesPayload> = {
-    ...snapshot,
-    payload: updatedPayload,
-    updatedAt: new Date().toISOString(),
-  };
-
-  await savePhoneSnapshot(updatedSnapshot);
-  return updatedPayload;
+  return saveNotesPayload(characterId, snapshot, { ...base, notes: [newNote, ...base.notes] });
 }
 
-/**
- * Delete a note from CheckPhone notes app.
- */
 export async function deleteCheckPhoneNote(
   characterId: string,
-  noteId: string
-): Promise<CheckPhoneNotesPayload | null> {
+  noteId: string,
+): Promise<CheckPhoneSnapshot<CheckPhoneNotesPayload> | null> {
   const snapshot = await loadPhoneSnapshot<CheckPhoneNotesPayload>(characterId, "notes");
   if (!snapshot?.payload) return null;
-
-  const updatedPayload: CheckPhoneNotesPayload = {
+  return saveNotesPayload(characterId, snapshot, {
     ...snapshot.payload,
-    notes: snapshot.payload.notes.filter((n) => n.id !== noteId),
-  };
-
-  const updatedSnapshot: CheckPhoneSnapshot<CheckPhoneNotesPayload> = {
-    ...snapshot,
-    payload: updatedPayload,
-    updatedAt: new Date().toISOString(),
-  };
-
-  await savePhoneSnapshot(updatedSnapshot);
-  return updatedPayload;
-}
-
-/**
- * Send a message as the character to a chat session.
- * This writes to short-term memory (chat history).
- */
-export function sendMessageAsCharacter(
-  sessionId: string,
-  characterId: string,
-  content: string,
-  options?: {
-    mediaType?: ChatMessage["mediaType"];
-    mediaData?: ChatMessage["mediaData"];
-  }
-): ChatMessage {
-  const character = loadCharacters().find((c) => c.id === characterId);
-  if (!character) {
-    throw new Error(`Character ${characterId} not found`);
-  }
-
-  const session = loadChatSessions().find((s) => s.id === sessionId);
-  if (!session) {
-    throw new Error(`Session ${sessionId} not found`);
-  }
-
-  const message = pushChatMessage({
-    sessionId,
-    role: "assistant",
-    content,
-    mediaType: options?.mediaType,
-    mediaData: options?.mediaData,
-    senderCharacterId: characterId,
-    senderName: character.name,
+    notes: snapshot.payload.notes.filter((note) => note.id !== noteId),
   });
-
-  return message;
-}
-
-/**
- * Post a moment as the character.
- * This writes to short-term memory (moments timeline).
- */
-export function postMomentAsCharacter(
-  characterId: string,
-  content: string,
-  options?: {
-    location?: string;
-    photoUrl?: string;
-    photoDescription?: string;
-  }
-): MomentPost {
-  const character = loadCharacters().find((c) => c.id === characterId);
-  if (!character) {
-    throw new Error(`Character ${characterId} not found`);
-  }
-
-  const post = createMomentPost({
-    authorId: characterId,
-    authorName: character.name,
-    authorAvatar: character.avatar,
-    content,
-    location: options?.location,
-    photoUrl: options?.photoUrl,
-    photoDescription: options?.photoDescription,
-  });
-
-  return post;
-}
-
-/**
- * Get all chat sessions for a character (private chats and group chats).
- */
-export function getCharacterChatSessions(characterId: string) {
-  const sessions = loadChatSessions();
-  return sessions.filter((s) => {
-    if (s.isGroup) {
-      return s.participantIds?.includes(characterId);
-    }
-    return s.contactId === characterId;
-  });
-}
-
-/**
- * Get user identity for display.
- */
-export function getUserDisplayName(): string {
-  const userIdentity = resolveUserIdentity();
-  return userIdentity?.nickname || "你";
 }

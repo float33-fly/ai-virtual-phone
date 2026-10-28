@@ -41,7 +41,6 @@ import {
 import { PageShell } from "@/components/ui/page-shell";
 import { ConfirmDialog, Toggle } from "@/components/ui";
 import { CheckPhoneDebugErrorCard } from "@/components/checkphone/checkphone-debug-error-card";
-import { CheckPhoneActionModal } from "@/components/checkphone/checkphone-action-modal";
 import { CheckPhoneAssetsPage } from "@/components/checkphone/checkphone-assets-page";
 import { CheckPhoneBilibiliPage } from "@/components/checkphone/checkphone-bilibili-page";
 import { CheckPhoneBrowserPage } from "@/components/checkphone/checkphone-browser-page";
@@ -67,6 +66,7 @@ import { CheckPhoneXPage } from "@/components/checkphone/checkphone-x-page";
 import { CheckPhoneYoutubePage } from "@/components/checkphone/checkphone-youtube-page";
 import { loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
+import { flushCheckPhoneInteractions, type CheckPhoneInteraction } from "@/lib/checkphone-interaction";
 import {
   CHECKPHONE_APP_SPECS,
   isCheckPhoneAppId,
@@ -288,6 +288,14 @@ export function CheckPhoneApp({ onClose }: CheckPhoneAppProps) {
   const [activeCharId, setActiveCharId] = useState<string | null>(null);
   const [states, setStates] = useState<Record<string, ManifestState>>({});
   const [manifestsCacheMap, setManifestsCacheMap] = useState<Record<string, CheckPhoneManifest>>({});
+  // 本次查手机里用户做过的操作；退出该角色的手机时一次性写进短期记忆
+  const pendingInteractionsRef = useRef<CheckPhoneInteraction[]>([]);
+  const flushPendingInteractions = () => {
+    const items = pendingInteractionsRef.current;
+    pendingInteractionsRef.current = [];
+    flushCheckPhoneInteractions(items);
+  };
+  useEffect(() => () => flushPendingInteractions(), []);
   
   // Real Date State
   const [currentDate, setCurrentDate] = useState<Date | null>(null);
@@ -451,11 +459,27 @@ export function CheckPhoneApp({ onClose }: CheckPhoneAppProps) {
     if (!activeCharacter || !selectedAppId) return null;
     switch (selectedAppId) {
       case "chat":
-        return <CheckPhoneChatPage character={activeCharacter} onBack={closeSelectedApp} />;
+        return (
+          <CheckPhoneChatPage
+            character={activeCharacter}
+            onBack={closeSelectedApp}
+            onInteraction={(item) =>
+              pendingInteractionsRef.current.push({ ...item, characterId: activeCharacter.id, appId: "chat" })
+            }
+          />
+        );
       case "phone":
         return <CheckPhonePhonePage character={activeCharacter} onBack={closeSelectedApp} />;
       case "notes":
-        return <CheckPhoneNotesPage character={activeCharacter} onBack={closeSelectedApp} />;
+        return (
+          <CheckPhoneNotesPage
+            character={activeCharacter}
+            onBack={closeSelectedApp}
+            onInteraction={(summary) =>
+              pendingInteractionsRef.current.push({ summary, characterId: activeCharacter.id, appId: "notes" })
+            }
+          />
+        );
       case "shopping":
         return <CheckPhoneShoppingPage character={activeCharacter} onBack={closeSelectedApp} />;
       case "assets":
@@ -538,6 +562,7 @@ export function CheckPhoneApp({ onClose }: CheckPhoneAppProps) {
 
   const handleBack = () => {
     if (activeCharId) {
+      flushPendingInteractions();
       setActiveCharId(null);
       setSelectedAppId(null);
     } else {

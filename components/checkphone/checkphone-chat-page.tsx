@@ -17,6 +17,7 @@ import {
   Plus,
   Smile,
   Mic,
+  Send,
   type LucideIcon,
 } from "lucide-react";
 import { CheckPhoneBilingualText, normalizeCheckPhoneText } from "@/components/checkphone/checkphone-bilingual-text";
@@ -45,10 +46,12 @@ import {
 } from "@/lib/checkphone-storage";
 import { splitBilingualText } from "@/lib/bilingual-text";
 import { resolveUserIdentity } from "@/lib/settings-storage";
+import { clipInteractionText, type CheckPhoneInteraction } from "@/lib/checkphone-interaction";
 
 type CheckPhoneChatPageProps = {
   character: Character;
   onBack: () => void;
+  onInteraction?: (item: Omit<CheckPhoneInteraction, "characterId" | "appId">) => void;
 };
 
 type ChatTabId = "conversations" | "groups" | "moments" | "contacts";
@@ -624,7 +627,17 @@ function CheckPhoneBubbleAvatar({
   );
 }
 
-function CheckPhoneChatComposer() {
+function CheckPhoneChatComposer({
+  characterName,
+  onSend,
+  disabled = false,
+}: {
+  characterName: string;
+  onSend: (text: string) => void;
+  disabled?: boolean;
+}) {
+  const [draft, setDraft] = useState("");
+  const canSend = !disabled && draft.trim().length > 0;
   const iconStyle = {
     width: "32px",
     height: "32px",
@@ -637,7 +650,14 @@ function CheckPhoneChatComposer() {
     flexShrink: 0,
     border: "1px solid rgba(255, 255, 255, 0.76)",
     boxShadow: "0 6px 14px rgba(70, 76, 112, 0.025)",
+    padding: 0,
   };
+
+  function submit() {
+    if (!canSend) return;
+    onSend(draft.trim());
+    setDraft("");
+  }
 
   return (
     <div
@@ -667,30 +687,63 @@ function CheckPhoneChatComposer() {
           padding: "0 12px 0 15px",
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
           gap: "10px",
           color: "rgba(62, 67, 95, 0.42)",
-          fontSize: "calc(12px*var(--app-text-scale,1))",
           border: "1px solid rgba(155, 132, 235, 0.08)",
         }}
       >
-        <span
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+        <input
+          type="text"
+          value={draft}
+          disabled={disabled}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              submit();
+            }
           }}
-        >
-          Type a message...
-        </span>
+          placeholder={`以${characterName}的身份发消息…`}
+          aria-label={`以${characterName}的身份发消息`}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            color: "#20243a",
+            fontSize: "calc(13px*var(--app-text-scale,1))",
+            fontFamily: "inherit",
+            padding: 0,
+          }}
+        />
         <Smile size={17} strokeWidth={2} style={{ flexShrink: 0 }} />
       </div>
-      <div style={iconStyle} aria-hidden="true">
-        <Mic size={17} strokeWidth={2.2} />
-      </div>
-      <div style={iconStyle} aria-hidden="true">
-        <MoreHorizontal size={18} strokeWidth={2.2} />
-      </div>
+      {canSend ? (
+        <button
+          type="button"
+          onClick={submit}
+          aria-label="发送"
+          style={{
+            ...iconStyle,
+            background: "linear-gradient(145deg, #9a78ff, #7452e9)",
+            color: "#fff",
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          <Send size={16} strokeWidth={2.2} />
+        </button>
+      ) : (
+        <>
+          <div style={iconStyle} aria-hidden="true">
+            <Mic size={17} strokeWidth={2.2} />
+          </div>
+          <div style={iconStyle} aria-hidden="true">
+            <MoreHorizontal size={18} strokeWidth={2.2} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -835,6 +888,62 @@ export function CheckPhoneChatPage({
     : activeGroup
       ? () => setSelectedGroupId(null)
       : onBack;
+
+  async function handleSendAsCharacter(text: string) {
+    if (!snapshot?.payload) return;
+    const now = new Date();
+    const timeLabel = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    const bubble: CheckPhoneChatBubble = {
+      id: `cp_user_op_${now.getTime()}`,
+      text,
+      timeLabel,
+      direction: "outgoing",
+    };
+    const current = snapshot.payload;
+    let nextPayload: CheckPhoneChatPayload | null = null;
+    let interaction: Omit<CheckPhoneInteraction, "characterId" | "appId"> | null = null;
+
+    if (activeConversation) {
+      const isUserThread = isRealDirectConversation(activeConversation);
+      const targetName = getConversationDisplayName(activeConversation);
+      nextPayload = {
+        ...current,
+        conversations: current.conversations.map((item) =>
+          item.id === activeConversation.id
+            ? { ...item, preview: text, messages: [...item.messages, bubble] }
+            : item,
+        ),
+      };
+      interaction = {
+        summary: isUserThread
+          ? `用{{char}}的账号在和{{user}}的对话框里打了一句：“${clipInteractionText(text)}”`
+          : `冒充{{char}}给${targetName}发了消息：“${clipInteractionText(text)}”`,
+        recipient: isUserThread ? undefined : { name: activeConversation.name, content: text },
+      };
+    } else if (activeGroup) {
+      nextPayload = {
+        ...current,
+        groups: current.groups.map((item) =>
+          item.id === activeGroup.id
+            ? { ...item, preview: text, messages: [...item.messages, bubble] }
+            : item,
+        ),
+      };
+      interaction = {
+        summary: `冒充{{char}}在群聊「${activeGroup.name}」里发了消息：“${clipInteractionText(text)}”`,
+      };
+    }
+
+    if (!nextPayload || !interaction) return;
+    const nextSnapshot: CheckPhoneSnapshot<CheckPhoneChatPayload> = {
+      ...snapshot,
+      updatedAt: now.toISOString(),
+      payload: nextPayload,
+    };
+    setSnapshot(nextSnapshot);
+    await savePhoneSnapshot(nextSnapshot, { silent: true });
+    onInteraction?.(interaction);
+  }
 
   return (
     <div
@@ -2027,7 +2136,11 @@ export function CheckPhoneChatPage({
                 })}
               </div>
             </div>
-            <CheckPhoneChatComposer />
+            <CheckPhoneChatComposer
+              characterName={character.name}
+              onSend={handleSendAsCharacter}
+              disabled={loading}
+            />
           </div>
         )}
 
@@ -2180,22 +2293,7 @@ export function CheckPhoneChatPage({
             </div>
             <CheckPhoneChatComposer
               characterName={character.name}
-              onSend={(content) => {
-                // 找到当前会话对应的真实聊天会话ID
-                const sessions = require("@/lib/chat-storage").loadChatSessions();
-                const realSession = sessions.find(
-                  (s: any) => !s.isGroup && s.contactId === character.id
-                );
-                if (!realSession) {
-                  alert("未找到与该角色的聊天会话，请先在主界面与该角色开启对话");
-                  return;
-                }
-                // 发送消息
-                sendMessageAsCharacter(realSession.id, character.id, content);
-                // 记录操作
-                const preview = content.length > 20 ? content.slice(0, 20) + "..." : content;
-                onInteraction?.(`以${character.name}的身份在私聊中发送了消息："${preview}"`);
-              }}
+              onSend={handleSendAsCharacter}
               disabled={loading}
             />
           </div>
