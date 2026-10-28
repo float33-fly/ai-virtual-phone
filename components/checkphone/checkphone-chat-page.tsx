@@ -698,6 +698,7 @@ function CheckPhoneChatComposer() {
 export function CheckPhoneChatPage({
   character,
   onBack,
+  onInteraction,
 }: CheckPhoneChatPageProps) {
   const [snapshot, setSnapshot] =
     useState<CheckPhoneSnapshot<CheckPhoneChatPayload> | null>(null);
@@ -2177,7 +2178,26 @@ export function CheckPhoneChatPage({
                 })}
               </div>
             </div>
-            <CheckPhoneChatComposer />
+            <CheckPhoneChatComposer
+              characterName={character.name}
+              onSend={(content) => {
+                // 找到当前会话对应的真实聊天会话ID
+                const sessions = require("@/lib/chat-storage").loadChatSessions();
+                const realSession = sessions.find(
+                  (s: any) => !s.isGroup && s.contactId === character.id
+                );
+                if (!realSession) {
+                  alert("未找到与该角色的聊天会话，请先在主界面与该角色开启对话");
+                  return;
+                }
+                // 发送消息
+                sendMessageAsCharacter(realSession.id, character.id, content);
+                // 记录操作
+                const preview = content.length > 20 ? content.slice(0, 20) + "..." : content;
+                onInteraction?.(`以${character.name}的身份在私聊中发送了消息："${preview}"`);
+              }}
+              disabled={loading}
+            />
           </div>
         )}
       </div>
